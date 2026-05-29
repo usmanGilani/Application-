@@ -1,19 +1,71 @@
 package com.example.data
 
+import android.content.Context
+import android.content.SharedPreferences
+
 object LoadCalculator {
-    const val WATT_AC = 2200.0
-    const val WATT_SINGLE_FL = 36.0
-    const val WATT_DOUBLE_FL = 72.0
-    const val WATT_BULB_HOLDER = 13.0
-    const val WATT_CEILING_FAN = 75.0
-    const val WATT_EXHAUST_FAN = 40.0
-    const val WATT_BRACKET_FAN = 60.0
-    const val WATT_LED_LIGHT = 15.0 // average wattage (5W-200W)
-    const val WATT_FANCY_LIGHT = 10.0
-    const val WATT_HI_BAY_LIGHT = 150.0 // average wattage (150W/200W)
-    const val WATT_SOCKET_5A = 1000.0
-    const val WATT_SOCKET_15A = 2000.0
-    const val WATT_SOCKET_20A = 3000.0
+    // Default fallback constants
+    const val DEFAULT_WATT_AC = 2200.0
+    const val DEFAULT_WATT_SINGLE_FL = 36.0
+    const val DEFAULT_WATT_DOUBLE_FL = 72.0
+    const val DEFAULT_WATT_BULB_HOLDER = 13.0
+    const val DEFAULT_WATT_CEILING_FAN = 75.0
+    const val DEFAULT_WATT_EXHAUST_FAN = 40.0
+    const val DEFAULT_WATT_BRACKET_FAN = 60.0
+    const val DEFAULT_WATT_LED_LIGHT = 15.0
+    const val DEFAULT_WATT_FANCY_LIGHT = 10.0
+    const val DEFAULT_WATT_HI_BAY_LIGHT = 150.0
+    const val DEFAULT_WATT_SOCKET_5A = 1000.0
+    const val DEFAULT_WATT_SOCKET_15A = 2000.0
+    const val DEFAULT_WATT_SOCKET_20A = 3000.0
+
+    // Mutable ratings used for dynamic load logic
+    var WATT_AC = DEFAULT_WATT_AC
+    var WATT_SINGLE_FL = DEFAULT_WATT_SINGLE_FL
+    var WATT_DOUBLE_FL = DEFAULT_WATT_DOUBLE_FL
+    var WATT_BULB_HOLDER = DEFAULT_WATT_BULB_HOLDER
+    var WATT_CEILING_FAN = DEFAULT_WATT_CEILING_FAN
+    var WATT_EXHAUST_FAN = DEFAULT_WATT_EXHAUST_FAN
+    var WATT_BRACKET_FAN = DEFAULT_WATT_BRACKET_FAN
+    var WATT_LED_LIGHT = DEFAULT_WATT_LED_LIGHT
+    var WATT_FANCY_LIGHT = DEFAULT_WATT_FANCY_LIGHT
+    var WATT_HI_BAY_LIGHT = DEFAULT_WATT_HI_BAY_LIGHT
+    var WATT_SOCKET_5A = DEFAULT_WATT_SOCKET_5A
+    var WATT_SOCKET_15A = DEFAULT_WATT_SOCKET_15A
+    var WATT_SOCKET_20A = DEFAULT_WATT_SOCKET_20A
+
+    /**
+     * Loads saved equipment ratings from SharedPreferences on app startup.
+     */
+    fun initialize(context: Context) {
+        val prefs = context.getSharedPreferences("equipment_ratings_prefs", Context.MODE_PRIVATE)
+        WATT_AC = prefs.getFloat("WATT_AC", DEFAULT_WATT_AC.toFloat()).toDouble()
+        WATT_SINGLE_FL = prefs.getFloat("WATT_SINGLE_FL", DEFAULT_WATT_SINGLE_FL.toFloat()).toDouble()
+        WATT_DOUBLE_FL = prefs.getFloat("WATT_DOUBLE_FL", DEFAULT_WATT_DOUBLE_FL.toFloat()).toDouble()
+        WATT_BULB_HOLDER = prefs.getFloat("WATT_BULB_HOLDER", DEFAULT_WATT_BULB_HOLDER.toFloat()).toDouble()
+        WATT_CEILING_FAN = prefs.getFloat("WATT_CEILING_FAN", DEFAULT_WATT_CEILING_FAN.toFloat()).toDouble()
+        WATT_EXHAUST_FAN = prefs.getFloat("WATT_EXHAUST_FAN", DEFAULT_WATT_EXHAUST_FAN.toFloat()).toDouble()
+        WATT_BRACKET_FAN = prefs.getFloat("WATT_BRACKET_FAN", DEFAULT_WATT_BRACKET_FAN.toFloat()).toDouble()
+        WATT_LED_LIGHT = prefs.getFloat("WATT_LED_LIGHT", DEFAULT_WATT_LED_LIGHT.toFloat()).toDouble()
+        WATT_FANCY_LIGHT = prefs.getFloat("WATT_FANCY_LIGHT", DEFAULT_WATT_FANCY_LIGHT.toFloat()).toDouble()
+        WATT_HI_BAY_LIGHT = prefs.getFloat("WATT_HI_BAY_LIGHT", DEFAULT_WATT_HI_BAY_LIGHT.toFloat()).toDouble()
+        WATT_SOCKET_5A = prefs.getFloat("WATT_SOCKET_5A", DEFAULT_WATT_SOCKET_5A.toFloat()).toDouble()
+        WATT_SOCKET_15A = prefs.getFloat("WATT_SOCKET_15A", DEFAULT_WATT_SOCKET_15A.toFloat()).toDouble()
+        WATT_SOCKET_20A = prefs.getFloat("WATT_SOCKET_20A", DEFAULT_WATT_SOCKET_20A.toFloat()).toDouble()
+    }
+
+    /**
+     * Commits updated equipment ratings and re-initializes.
+     */
+    fun saveRatings(context: Context, ratings: Map<String, Double>) {
+        val prefs = context.getSharedPreferences("equipment_ratings_prefs", Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        ratings.forEach { (key, value) ->
+            editor.putFloat(key, value.toFloat())
+        }
+        editor.apply()
+        initialize(context)
+    }
 
     /**
      * Calculates the total electrical load for a house in Watts based on appliance quantities and their respective wattages.

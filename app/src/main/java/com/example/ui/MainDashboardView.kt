@@ -318,11 +318,22 @@ fun MainDashboardView(
                         onSortChange = viewModel::updateSortOrder,
                         onHouseSelected = viewModel::selectHouseNo
                     )
-                    DashboardTab.SETTINGS -> SettingsScreen(
-                        webScriptUrl = webScriptUrl,
-                        onUrlChange = viewModel::updateWebScriptUrl,
-                        onRefreshDemo = viewModel::resetToDemoData
-                    )
+                    DashboardTab.SETTINGS -> {
+                        var showAdminPanel by remember { mutableStateOf(false) }
+                        if (showAdminPanel) {
+                            AdminPanelScreen(
+                                onBack = { showAdminPanel = false },
+                                viewModel = viewModel
+                            )
+                        } else {
+                            SettingsScreen(
+                                webScriptUrl = webScriptUrl,
+                                onUrlChange = viewModel::updateWebScriptUrl,
+                                onRefreshDemo = viewModel::resetToDemoData,
+                                onOpenAdmin = { showAdminPanel = true }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -2119,41 +2130,231 @@ fun InventoryItemRow(
 fun SettingsScreen(
     webScriptUrl: String,
     onUrlChange: (String) -> Unit,
-    onRefreshDemo: () -> Unit
+    onRefreshDemo: () -> Unit,
+    onOpenAdmin: () -> Unit
 ) {
     val context = LocalContext.current
     var inputUrl by remember(webScriptUrl) { mutableStateOf(webScriptUrl) }
 
     val codeTemplate = """
-// GOOGLE APPS SCRIPT CODE FOR WEB SERVICE OUTPUT
-// Deploy as a "Web App" accessible to "Anyone" and execute under your account.
+// GOOGLE APPS SCRIPT CODE FOR WEB APP
+// Resilient dynamic parser matching Usman Gilani's Google Sheet
+// Deploy as "Web App", executed as "Me", accessible to "Anyone".
+
 function doGet(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  var rows = sheet.getDataRange().getValues();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  var range = sheet.getDataRange();
+  var rows = range.getValues();
+  
+  if (rows.length < 2) {
+    return ContentService.createTextOutput(JSON.stringify([]))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  
   var heads = rows[0];
   var data = [];
+  
+  // Normalize column headers to check matches
+  function normalizeHeader(h) {
+    if (!h) return "";
+    return h.toString().toLowerCase().trim()
+      .replace(/[^a-z0-9]/g, ""); // strip non-alphas
+  }
+  
+  var cleanHeads = heads.map(normalizeHeader);
+  
+  // Dynamic column finder (returns index)
+  function findColIndex(keywords) {
+    for (var i = 0; i < cleanHeads.length; i++) {
+      var head = cleanHeads[i];
+      for (var j = 0; j < keywords.length; j++) {
+        if (head.indexOf(keywords[j].toLowerCase().replace(/[^a-z0-9]/g, "")) !== -1) {
+          return i;
+        }
+      }
+    }
+    return -1;
+  }
+  
+  // Map indices for basic properties
+  var idxResident = findColIndex(["Resident Name", "residentname"]);
+  var idxHouseNo = findColIndex(["House No.", "Building Name", "HouseNo", "BuildingName", "house"]);
+  var idxAc = findColIndex(["No. of AC(s) Installed", "acCount", "acinstalled", "ac(s)"]);
+  var idxSingleFl = findColIndex(["No. of Single Fixture Fluorescent", "singlefl"]);
+  var idxDoubleFl = findColIndex(["No. of Double Fixture Fluorescent", "doublefl"]);
+  var idxBulbHolder = findColIndex(["No. of Bulb Holder Screw Type", "bulbholder"]);
+  var idxCeilingFan = findColIndex(["No. of Ceiling Fan", "ceilingfan"]);
+  
+  // Custom multi-column exhaust aggregates (all exhaust keys)
+  var exhaustKeywords = [
+    "exhaustfanplasticbody10inch",
+    "exhaustfanmetalbody10inch",
+    "exhaustfanplasticbody12inch",
+    "exhaustfanmetalbody12inch",
+    "flaseceilngexhaustfan",
+    "falseceilingexhaustfan",
+    "kitchenhoodblowerfan",
+    "falseceilingfanplasticbody"
+  ];
+  var idxExhausts = [];
+  for (var i = 0; i < cleanHeads.length; i++) {
+    for (var k = 0; k < exhaustKeywords.length; k++) {
+      if (cleanHeads[i].indexOf(exhaustKeywords[k]) !== -1) {
+        idxExhausts.push(i);
+        break;
+      }
+    }
+  }
+  
+  // Bracket fan column indices
+  var bracketKeywords = [
+    "bracketfanplasticbody",
+    "bracketfanmetalbody18inch"
+  ];
+  var idxBrackets = [];
+  for (var i = 0; i < cleanHeads.length; i++) {
+    for (var k = 0; k < bracketKeywords.length; k++) {
+      if (cleanHeads[i].indexOf(bracketKeywords[k]) !== -1) {
+        idxBrackets.push(i);
+        break;
+      }
+    }
+  }
+  
+  // Specific LED targets
+  var idxTango10w = findColIndex(["No. of LED Tango Light - 10W", "ledtangolight10w", "tango10w"]);
+  var idxTango20w = findColIndex(["No. of LED Tango Light - 20W", "ledtangolight20w", "tango20w"]);
+  var idxDownlight13w = findColIndex(["No. of LED Downlight - 13W", "leddownlight13w", "down5w", "down13w"]);
+  
+  // Rest of LEDs summed together for general ledLightCount
+  var specificLedIndices = [idxTango10w, idxTango20w, idxDownlight13w];
+  var otherLedKeywords = [
+    "ledsinglefixture",
+    "leddoublefixture",
+    "ledweatherprooflightwithcover",
+    "leddownlight5w",
+    "leddownlight21w",
+    "leddownlight24w",
+    "ledvanitylight10w",
+    "ledtangolight30w",
+    "ledtangolight50w",
+    "ledtangolight70w",
+    "ledtangolight200w",
+    "ledfasleceilingpanellights",
+    "ledfalseceilingpanellights"
+  ];
+  var idxOtherLeds = [];
+  for (var i = 0; i < cleanHeads.length; i++) {
+    if (specificLedIndices.indexOf(i) !== -1) continue;
+    for (var k = 0; k < otherLedKeywords.length; k++) {
+      if (cleanHeads[i].indexOf(otherLedKeywords[k]) !== -1) {
+        idxOtherLeds.push(i);
+        break;
+      }
+    }
+  }
+  
+  var idxFancy = findColIndex(["No. of Fancy Light - 10W", "fancylight"]);
+  
+  // Hi-Bays summed
+  var hibayKeywords = [
+    "ledhibaylight150w",
+    "ledhibaylight200w",
+    "ledhibaylight2200w"
+  ];
+  var idxHiBays = [];
+  for (var i = 0; i < cleanHeads.length; i++) {
+    for (var k = 0; k < hibayKeywords.length; k++) {
+      if (cleanHeads[i].indexOf(hibayKeywords[k]) !== -1) {
+        idxHiBays.push(i);
+        break;
+      }
+    }
+  }
+  
+  var idxSocket5a = findColIndex(["No. of 5A sockets", "socket5a", "5asockets"]);
+  var idxSocket15a = findColIndex(["No. 15A sockets", "socket15a", "15asockets"]);
+  var idxSocket20a = findColIndex(["No. 20A sockets", "socket20a", "20asockets"]);
+  var idxSubstation = findColIndex(["Grid Feeder", "gridfeeder", "substation"]);
 
+  // Process rows
   for (var r = 1; r < rows.length; r++) {
     var row = rows[r];
+    
+    var resident = idxResident !== -1 ? (row[idxResident] || "").toString().trim() : "";
+    var house = idxHouseNo !== -1 ? (row[idxHouseNo] || "").toString().trim() : "";
+    
+    // Ignore pure spacer / blank rows
+    if (resident === "" && house === "") {
+      continue;
+    }
+    
     var obj = {};
-    obj.residentName = row[0] || "";
-    obj.houseNo = row[1] || "";
-    obj.acCount = parseInt(row[2]) || 0;
-    obj.singleFlCount = parseInt(row[3]) || 0;
-    obj.doubleFlCount = parseInt(row[4]) || 0;
-    obj.bulbHolderCount = parseInt(row[5]) || 0;
-    obj.ceilingFanCount = parseInt(row[6]) || 0;
-    obj.exhaustFanCount = parseInt(row[7]) || 0;
-    obj.bracketFanCount = parseInt(row[8]) || 0;
-    obj.ledLightCount = parseInt(row[9]) || 0;
-    obj.fancyLightCount = parseInt(row[10]) || 0;
-    obj.hiBayLightCount = parseInt(row[11]) || 0;
-    obj.socket5aCount = parseInt(row[12]) || 0;
-    obj.socket15aCount = parseInt(row[13]) || 0;
-    obj.socket20aCount = parseInt(row[14]) || 0;
+    obj.residentName = resident || "Unnamed";
+    obj.houseNo = house || "N/A";
+    
+    function valSafe(idx) {
+      if (idx === -1 || idx === undefined) return 0;
+      var raw = row[idx];
+      if (raw === "" || raw === null || raw === undefined) return 0;
+      var num = parseInt(raw);
+      return isNaN(num) ? 0 : num;
+    }
+    
+    obj.acCount = valSafe(idxAc);
+    obj.singleFlCount = valSafe(idxSingleFl);
+    obj.doubleFlCount = valSafe(idxDoubleFl);
+    obj.bulbHolderCount = valSafe(idxBulbHolder);
+    obj.ceilingFanCount = valSafe(idxCeilingFan);
+    
+    // Aggregate exhausts
+    var exhaustSum = 0;
+    for (var j = 0; j < idxExhausts.length; j++) {
+      exhaustSum += valSafe(idxExhausts[j]);
+    }
+    obj.exhaustFanCount = exhaustSum;
+    
+    // Aggregate brackets
+    var bracketSum = 0;
+    for (var j = 0; j < idxBrackets.length; j++) {
+      bracketSum += valSafe(idxBrackets[j]);
+    }
+    obj.bracketFanCount = bracketSum;
+    
+    // Specific LEDs
+    obj.ledTango10w = valSafe(idxTango10w);
+    obj.ledTango20w = valSafe(idxTango20w);
+    obj.ledDownlight13w = valSafe(idxDownlight13w);
+    
+    // Aggregate other LEDs
+    var otherLedSum = 0;
+    for (var j = 0; j < idxOtherLeds.length; j++) {
+      otherLedSum += valSafe(idxOtherLeds[j]);
+    }
+    obj.ledLightCount = otherLedSum;
+    
+    obj.fancyLightCount = valSafe(idxFancy);
+    
+    // Aggregate hiBays
+    var hiBaySum = 0;
+    for (var j = 0; j < idxHiBays.length; j++) {
+      hiBaySum += valSafe(idxHiBays[j]);
+    }
+    obj.hiBayLightCount = hiBaySum;
+    
+    obj.socket5aCount = valSafe(idxSocket5a);
+    obj.socket15aCount = valSafe(idxSocket15a);
+    obj.socket20aCount = valSafe(idxSocket20a);
+    obj.substationId = idxSubstation !== -1 ? (row[idxSubstation] || "").toString().trim() : "Substation 1";
+    
     data.push(obj);
   }
-
+  
+  // Cloud metrics debugger logs
+  console.log("SUCCESSFUL RUN: Analyzed sheet range.");
+  console.log("Processed records: " + data.length);
+  
   var payload = JSON.stringify(data);
   return ContentService.createTextOutput(payload)
     .setMimeType(ContentService.MimeType.JSON);
@@ -2227,6 +2428,56 @@ function doGet(e) {
                             Text("Save Web Script")
                         }
                     }
+                }
+            }
+        }
+
+        // Entrance to Admin Panel Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenAdmin() },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)),
+                border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Admin Settings Icon",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Admin Panel: Equipment Ratings Calibrator",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Manually adjust equipment rated power values (Watts) inside the app to recalibrate real-time grid and transformer loads.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ArrowForward,
+                        contentDescription = "Go inside",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }
@@ -2319,6 +2570,289 @@ function doGet(e) {
                             .padding(8.dp)
                             .verticalScroll(rememberScrollState())
                     )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// ADMIN SCREEN: CALIBRATE EQUIPMENT POWER RATINGS
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminPanelScreen(
+    onBack: () -> Unit,
+    viewModel: LoadViewModel
+) {
+    val context = LocalContext.current
+    val currentRatings = remember { viewModel.getEquipmentRatings() }
+    
+    // Manage dynamic input fields via observable state map
+    val ratingStates = remember {
+        mutableStateMapOf<String, String>().apply {
+            currentRatings.forEach { (key, value) ->
+                put(key, value.toInt().toString())
+            }
+        }
+    }
+    
+    val equipmentLabels = remember {
+        mapOf(
+            "WATT_AC" to Pair("Air Conditioner (AC)", "Heavy cooling compressor"),
+            "WATT_SINGLE_FL" to Pair("Single Fixture Fluorescent", "Single tube rod Light (36W)"),
+            "WATT_DOUBLE_FL" to Pair("Double Fixture Fluorescent", "Double tube rod Light (72W)"),
+            "WATT_BULB_HOLDER" to Pair("Bulb Holder Screw Type", "E27/B22 utility light bulb socket"),
+            "WATT_CEILING_FAN" to Pair("Ceiling Fan", "Indoor ceiling induction fan"),
+            "WATT_EXHAUST_FAN" to Pair("Exhaust Fan", "Plastic/Metal frame kitchen exh. fan"),
+            "WATT_BRACKET_FAN" to Pair("Bracket Fan", "Oscillating wall bracket fan"),
+            "WATT_LED_LIGHT" to Pair("LED Light", "Standard 15W-30W panel lamp"),
+            "WATT_FANCY_LIGHT" to Pair("Fancy Light", "Chandelier or architectural sconce"),
+            "WATT_HI_BAY_LIGHT" to Pair("Hi-Bay Light", "Industrial flood or courtyard reflector"),
+            "WATT_SOCKET_5A" to Pair("5A Outlet socket", "Chargers and laptops plug load"),
+            "WATT_SOCKET_15A" to Pair("15A Outlet socket", "Microwave or water heater plug load"),
+            "WATT_SOCKET_20A" to Pair("20A Heavy-duty socket", "Power AC/Heater plug load")
+        )
+    }
+
+    // Dynamic adjustment intervals per appliance
+    fun getStep(key: String): Int {
+        return when (key) {
+            "WATT_AC", "WATT_SOCKET_5A", "WATT_SOCKET_15A", "WATT_SOCKET_20A" -> 100
+            "WATT_HI_BAY_LIGHT" -> 50
+            "WATT_CEILING_FAN", "WATT_BRACKET_FAN", "WATT_EXHAUST_FAN" -> 5
+            else -> 1
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "EQUIPMENT RATINGS ADMIN",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp
+                            )
+                        )
+                        Text(
+                            text = "Manually calibrate grid load multipliers",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
+            )
+        },
+        bottomBar = {
+            Surface(
+                tonalElevation = 8.dp,
+                shadowElevation = 8.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            ratingStates["WATT_AC"] = LoadCalculator.DEFAULT_WATT_AC.toInt().toString()
+                            ratingStates["WATT_SINGLE_FL"] = LoadCalculator.DEFAULT_WATT_SINGLE_FL.toInt().toString()
+                            ratingStates["WATT_DOUBLE_FL"] = LoadCalculator.DEFAULT_WATT_DOUBLE_FL.toInt().toString()
+                            ratingStates["WATT_BULB_HOLDER"] = LoadCalculator.DEFAULT_WATT_BULB_HOLDER.toInt().toString()
+                            ratingStates["WATT_CEILING_FAN"] = LoadCalculator.DEFAULT_WATT_CEILING_FAN.toInt().toString()
+                            ratingStates["WATT_EXHAUST_FAN"] = LoadCalculator.DEFAULT_WATT_EXHAUST_FAN.toInt().toString()
+                            ratingStates["WATT_BRACKET_FAN"] = LoadCalculator.DEFAULT_WATT_BRACKET_FAN.toInt().toString()
+                            ratingStates["WATT_LED_LIGHT"] = LoadCalculator.DEFAULT_WATT_LED_LIGHT.toInt().toString()
+                            ratingStates["WATT_FANCY_LIGHT"] = LoadCalculator.DEFAULT_WATT_FANCY_LIGHT.toInt().toString()
+                            ratingStates["WATT_HI_BAY_LIGHT"] = LoadCalculator.DEFAULT_WATT_HI_BAY_LIGHT.toInt().toString()
+                            ratingStates["WATT_SOCKET_5A"] = LoadCalculator.DEFAULT_WATT_SOCKET_5A.toInt().toString()
+                            ratingStates["WATT_SOCKET_15A"] = LoadCalculator.DEFAULT_WATT_SOCKET_15A.toInt().toString()
+                            ratingStates["WATT_SOCKET_20A"] = LoadCalculator.DEFAULT_WATT_SOCKET_20A.toInt().toString()
+                            Toast.makeText(context, "Ratings restored to defaults. Save to apply.", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Defaults", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Reset Defaults")
+                    }
+
+                    Button(
+                        onClick = {
+                            val updatedMap = mutableMapOf<String, Double>()
+                            var valid = true
+                            ratingStates.forEach { (key, value) ->
+                                val doubleVal = value.toDoubleOrNull()
+                                if (doubleVal == null || doubleVal < 0) {
+                                    valid = false
+                                } else {
+                                    updatedMap[key] = doubleVal
+                                }
+                            }
+                            if (valid) {
+                                viewModel.updateEquipmentRatings(updatedMap)
+                                Toast.makeText(context, "Ratings calibrated! Connected loads recalculated.", Toast.LENGTH_LONG).show()
+                                onBack()
+                            } else {
+                                Toast.makeText(context, "Input error. All entries must be positive numbers.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1.2f)
+                    ) {
+                        Icon(Icons.Default.Save, contentDescription = "Save", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save & Re-grid")
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.12f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Note Icon",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "App-only Calibration Panel",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Calibrating equipment wattages instantly recalibrates individual household, block-wide, and grid transformer connected loads in real-time across the SQLite database.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Render adjustable input list for all equipment
+            ratingStates.keys.sorted().forEach { key ->
+                val labels = equipmentLabels[key] ?: Pair(key, "")
+                val step = getStep(key)
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1.2f)) {
+                                Text(
+                                    text = labels.first,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                if (labels.second.isNotEmpty()) {
+                                    Text(
+                                        text = labels.second,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            }
+                            
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                // Minus iconbutton
+                                IconButton(
+                                    onClick = {
+                                        val cur = ratingStates[key]?.toIntOrNull() ?: 0
+                                        val nextVal = (cur - step).coerceAtLeast(0)
+                                        ratingStates[key] = nextVal.toString()
+                                    },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Remove,
+                                        contentDescription = "Decrement",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                
+                                // Numerical entry textfield
+                                OutlinedTextField(
+                                    value = ratingStates[key] ?: "",
+                                    onValueChange = { input ->
+                                        if (input.all { it.isDigit() }) {
+                                            ratingStates[key] = input
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .width(72.dp)
+                                        .padding(horizontal = 4.dp),
+                                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                        textAlign = TextAlign.Center,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                                
+                                // Plus iconbutton
+                                IconButton(
+                                    onClick = {
+                                        val cur = ratingStates[key]?.toIntOrNull() ?: 0
+                                        val nextVal = cur + step
+                                        ratingStates[key] = nextVal.toString()
+                                    },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Increment",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

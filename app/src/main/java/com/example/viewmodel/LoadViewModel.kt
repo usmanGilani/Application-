@@ -118,6 +118,7 @@ class LoadViewModel(application: Application) : AndroidViewModel(application) {
 
     // Seed mock database status track (checks once on launch)
     init {
+        LoadCalculator.initialize(application)
         viewModelScope.launch {
             repository.allRecords.first().let { currentList ->
                 if (currentList.isEmpty()) {
@@ -132,6 +133,45 @@ class LoadViewModel(application: Application) : AndroidViewModel(application) {
                         _syncState.value = SyncUiState.Error("Failed seeding mock dataset.")
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Gets the current equipment ratings values from LoadCalculator.
+     */
+    fun getEquipmentRatings(): Map<String, Double> {
+        return mapOf(
+            "WATT_AC" to LoadCalculator.WATT_AC,
+            "WATT_SINGLE_FL" to LoadCalculator.WATT_SINGLE_FL,
+            "WATT_DOUBLE_FL" to LoadCalculator.WATT_DOUBLE_FL,
+            "WATT_BULB_HOLDER" to LoadCalculator.WATT_BULB_HOLDER,
+            "WATT_CEILING_FAN" to LoadCalculator.WATT_CEILING_FAN,
+            "WATT_EXHAUST_FAN" to LoadCalculator.WATT_EXHAUST_FAN,
+            "WATT_BRACKET_FAN" to LoadCalculator.WATT_BRACKET_FAN,
+            "WATT_LED_LIGHT" to LoadCalculator.WATT_LED_LIGHT,
+            "WATT_FANCY_LIGHT" to LoadCalculator.WATT_FANCY_LIGHT,
+            "WATT_HI_BAY_LIGHT" to LoadCalculator.WATT_HI_BAY_LIGHT,
+            "WATT_SOCKET_5A" to LoadCalculator.WATT_SOCKET_5A,
+            "WATT_SOCKET_15A" to LoadCalculator.WATT_SOCKET_15A,
+            "WATT_SOCKET_20A" to LoadCalculator.WATT_SOCKET_20A
+        )
+    }
+
+    /**
+     * Updates the equipment ratings dynamically, stores them in SharedPreferences, and triggers
+     * full recalculation of loads across existing local housing records.
+     */
+    fun updateEquipmentRatings(ratings: Map<String, Double>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            LoadCalculator.saveRatings(getApplication(), ratings)
+            val currentList = repository.allRecords.first()
+            if (currentList.isNotEmpty()) {
+                val updatedList = currentList.map { record ->
+                    val newLoad = LoadCalculator.calculateHouseLoadKW(record)
+                    record.copy(totalLoadKw = newLoad)
+                }
+                houseDao.insertHouseRecords(updatedList)
             }
         }
     }

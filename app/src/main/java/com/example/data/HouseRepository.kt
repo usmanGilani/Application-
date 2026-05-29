@@ -209,21 +209,76 @@ class HouseRepository(
 
     /**
      * Resiliently parse raw Apps Script web output to find arrays (JSON list or map properties).
+     * Leverages generic Map structures for total type compatibility and fallback resilience.
      */
     private fun parseFlexibly(jsonString: String): List<HouseRecord> {
         val trimmed = jsonString.trim()
         
-        // Strategy A: Direct List
-        try {
-            val listType = Types.newParameterizedType(List::class.java, HouseRecord::class.java)
-            val adapter = moshi.adapter<List<HouseRecord>>(listType)
-            val list = adapter.fromJson(trimmed)
-            if (!list.isNullOrEmpty()) return list
-        } catch (e: Exception) {
-            Log.d("HouseRepository", "Strategy A direct list parsing skipped: ${e.localizedMessage}")
+        // Helper to convert list of generic maps into HouseRecord objects securely
+        fun buildRecordsFromMapList(mapList: List<*>): List<HouseRecord> {
+            val records = mutableListOf<HouseRecord>()
+            for (rawItem in mapList) {
+                @Suppress("UNCHECKED_CAST")
+                val item = rawItem as? Map<String, Any> ?: continue
+                
+                val residentName = (item["residentName"] as? String) ?: "Unnamed"
+                val houseNo = (item["houseNo"] as? String) ?: "N/A"
+                
+                fun mapToInt(v: Any?): Int {
+                    return when (v) {
+                        is Double -> v.toInt()
+                        is Float -> v.toInt()
+                        is Int -> v
+                        is Long -> v.toInt()
+                        is String -> v.toIntOrNull() ?: 0
+                        else -> 0
+                    }
+                }
+                
+                records.add(
+                    HouseRecord(
+                        residentName = residentName,
+                        houseNo = houseNo,
+                        acCount = mapToInt(item["acCount"]),
+                        singleFlCount = mapToInt(item["singleFlCount"]),
+                        doubleFlCount = mapToInt(item["doubleFlCount"]),
+                        bulbHolderCount = mapToInt(item["bulbHolderCount"]),
+                        ceilingFanCount = mapToInt(item["ceilingFanCount"]),
+                        exhaustFanCount = mapToInt(item["exhaustFanCount"]),
+                        bracketFanCount = mapToInt(item["bracketFanCount"]),
+                        ledLightCount = mapToInt(item["ledLightCount"]),
+                        fancyLightCount = mapToInt(item["fancyLightCount"]),
+                        hiBayLightCount = mapToInt(item["hiBayLightCount"]),
+                        socket5aCount = mapToInt(item["socket5aCount"]),
+                        socket15aCount = mapToInt(item["socket15aCount"]),
+                        socket20aCount = mapToInt(item["socket20aCount"]),
+                        substationId = (item["substationId"] as? String) ?: "",
+                        ledTango10w = mapToInt(item["ledTango10w"]),
+                        ledTango20w = mapToInt(item["ledTango20w"]),
+                        ledDownlight13w = mapToInt(item["ledDownlight13w"])
+                    )
+                )
+            }
+            return records
         }
 
-        // Strategy B: Wrapped inside standard payload key { "data": [...] } or { "records": [...] }
+        // Strategy A: Parse list of maps directly
+        try {
+            val mapListType = Types.newParameterizedType(
+                List::class.java,
+                Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+            )
+            val adapter = moshi.adapter<List<*>>(mapListType)
+            val list = adapter.fromJson(trimmed)
+            if (!list.isNullOrEmpty()) {
+                val records = buildRecordsFromMapList(list)
+                if (records.isNotEmpty()) return records
+            }
+        } catch (e: Exception) {
+            Log.d("HouseRepository", "Strategy A list of maps parsing skipped: ${e.localizedMessage}")
+        }
+
+        // Strategy B: Parse nested wrapped lists inside an object (e.g. { "data": [...] })
         try {
             val mapType = Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
             val mapAdapter = moshi.adapter<Map<String, Any>>(mapType)
@@ -233,15 +288,13 @@ class HouseRepository(
                 for (target in targets) {
                     val innerList = root[target]
                     if (innerList is List<*>) {
-                        val innerJson = moshi.adapter(Any::class.java).toJson(innerList)
-                        val listType = Types.newParameterizedType(List::class.java, HouseRecord::class.java)
-                        val list = moshi.adapter<List<HouseRecord>>(listType).fromJson(innerJson)
-                        if (!list.isNullOrEmpty()) return list
+                        val records = buildRecordsFromMapList(innerList)
+                        if (records.isNotEmpty()) return records
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.d("HouseRepository", "Strategy B wrapped object parsing skipped: ${e.localizedMessage}")
+            Log.d("HouseRepository", "Strategy B nested list of maps parsing skipped: ${e.localizedMessage}")
         }
 
         return emptyList()
